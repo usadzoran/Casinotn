@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Game } from '../types/database';
 import { useAuth } from '../context/AuthContext';
-import { casinoEngine } from '../lib/supabase';
+import { casinoApi } from '../lib/supabase';
 import confetti from 'canvas-confetti';
 import { X, Play, AlertCircle, Sparkles, Coins, RefreshCw, Trophy } from 'lucide-react';
 
@@ -50,8 +50,8 @@ export const GameModal: React.FC<GameModalProps> = ({ game, onClose, onSuccessBe
     setLastResult(null);
 
     try {
-      // Simulate physical animation duration
-      const playPromise = casinoEngine.playCasinoGame(user.id, game.slug, betAmount);
+      // Execute via Supabase atomic play_game RPC
+      const playPromise = casinoApi.playGame(game.slug, betAmount);
 
       // Visual animations based on game type
       if (game.slug === 'golden-slots') {

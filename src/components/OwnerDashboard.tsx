@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { casinoEngine, getSavedSupabaseConfig, saveSupabaseConfig } from '../lib/supabase';
-import { Match, Profile, Game } from '../types/database';
+import { casinoApi, supabase } from '../lib/supabase';
+import { Match, Profile, Game, Wallet, Bet } from '../types/database';
 import {
   Crown,
   Users,
@@ -15,10 +15,7 @@ import {
   X,
   RefreshCw,
   Copy,
-  Database,
-  Sliders,
   DollarSign,
-  Play,
   FileCode,
 } from 'lucide-react';
 
@@ -28,9 +25,7 @@ export const OwnerDashboard: React.FC = () => {
 
   // Modal States
   const [newAdminModal, setNewAdminModal] = useState(false);
-  const [adminFullName, setAdminFullName] = useState('');
-  const [adminUsername, setAdminUsername] = useState('');
-  const [adminEmail, setAdminEmail] = useState('');
+  const [selectedUserToPromote, setSelectedUserToPromote] = useState('');
   const [adminInitialBalance, setAdminInitialBalance] = useState(10000);
 
   const [topUpModal, setTopUpModal] = useState(false);
@@ -60,39 +55,88 @@ export const OwnerDashboard: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [copiedSql, setCopiedSql] = useState(false);
 
-  // Data fetching
-  const allProfiles = casinoEngine.getProfiles();
+  // Data state directly from Supabase
+  const [allProfiles, setAllProfiles] = useState<Profile[]>([]);
+  const [allWallets, setAllWallets] = useState<Wallet[]>([]);
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [games, setGames] = useState<Game[]>([]);
+  const [allBets, setAllBets] = useState<Bet[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadData = useCallback(async () => {
+    try {
+      const [p, w, m, g, b] = await Promise.all([
+        casinoApi.getAllProfiles(),
+        casinoApi.getAllWallets(),
+        casinoApi.getMatches(),
+        casinoApi.getGames(),
+        casinoApi.getBets(user?.id, 'owner'),
+      ]);
+      setAllProfiles(p);
+      setAllWallets(w);
+      setMatches(m);
+      setGames(g);
+      setAllBets(b);
+    } catch (err) {
+      console.warn('OwnerDashboard load error:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    loadData();
+
+    // Supabase Realtime subscriptions
+    const channel = supabase
+      .channel('owner-dashboard-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'wallets' }, () => {
+        casinoApi.getAllWallets().then(setAllWallets);
+        refreshUserData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+        casinoApi.getAllProfiles().then(setAllProfiles);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, () => {
+        casinoApi.getMatches().then(setMatches);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bets' }, () => {
+        if (user?.id) {
+          casinoApi.getBets(user.id, 'owner').then(setAllBets);
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadData, refreshUserData, user?.id]);
+
   const admins = allProfiles.filter((p) => p.role === 'admin');
   const players = allProfiles.filter((p) => p.role === 'player');
-  const matches = casinoEngine.getMatches();
-  const games = casinoEngine.getGames();
-  const allBets = casinoEngine.getBets(user?.id || '', 'owner');
-  const ownerBalance = wallet ? wallet.balance : 0;
+  const ownerBalance = wallet ? Number(wallet.balance) : 0;
 
   // Handlers
-  const handleCreateAdmin = async (e: React.FormEvent) => {
+  const handlePromoteAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || !selectedUserToPromote) return;
     setError(null);
     setIsSubmitting(true);
     try {
-      await casinoEngine.createAdmin(user.id, {
-        fullName: adminFullName,
-        username: adminUsername,
-        email: adminEmail,
-        initialBalance: adminInitialBalance,
-      });
-      refreshUserData();
-      setSuccess(`تم تعيين المشرف ${adminFullName} بنجاح مع رصيد $${adminInitialBalance.toLocaleString()}`);
+      await casinoApi.assignAdminRole(selectedUserToPromote);
+      if (adminInitialBalance > 0) {
+        await casinoApi.ownerTransferToAdmin(selectedUserToPromote, adminInitialBalance);
+      }
+      await refreshUserData();
+      await loadData();
+      setSuccess('تم ترقية المستخدم إلى مشرف وتخصيص الرصيد الأولي بنجاح!');
       setTimeout(() => {
         setNewAdminModal(false);
         setSuccess(null);
-        setAdminFullName('');
-        setAdminUsername('');
-        setAdminEmail('');
+        setSelectedUserToPromote('');
       }, 1500);
     } catch (err: any) {
-      setError(err?.message || 'فشل إنشاء المشرف');
+      setError(err?.message || 'فشل ترقية المشرف');
     } finally {
       setIsSubmitting(false);
     }
@@ -104,8 +148,9 @@ export const OwnerDashboard: React.FC = () => {
     setError(null);
     setIsSubmitting(true);
     try {
-      await casinoEngine.ownerAddAdminBalance(user.id, selectedAdminId, topUpAmount, 'تخصيص رصيد من الخزينة الرئيسية للمشرف');
-      refreshUserData();
+      await casinoApi.ownerTransferToAdmin(selectedAdminId, topUpAmount);
+      await refreshUserData();
+      await loadData();
       setSuccess(`تمت إضافة $${topUpAmount.toLocaleString()} إلى رصيد المشرف بنجاح!`);
       setTimeout(() => {
         setTopUpModal(false);
@@ -125,7 +170,7 @@ export const OwnerDashboard: React.FC = () => {
     setIsSubmitting(true);
     try {
       const matchTime = new Date(Date.now() + matchHoursFromNow * 3600 * 1000).toISOString();
-      await casinoEngine.createMatch(user.id, {
+      await casinoApi.createMatch({
         league,
         team_a: teamA,
         team_b: teamB,
@@ -133,8 +178,9 @@ export const OwnerDashboard: React.FC = () => {
         odds_draw: oddsDraw,
         odds_team_b: oddsB,
         match_time: matchTime,
+        status: 'open',
       });
-      refreshUserData();
+      await loadData();
       setSuccess('تمت إضافة المباراة بنجاح!');
       setTimeout(() => {
         setNewMatchModal(false);
@@ -155,15 +201,15 @@ export const OwnerDashboard: React.FC = () => {
     setError(null);
     setIsSubmitting(true);
     try {
-      const result = await casinoEngine.settleMatch(
-        user.id,
+      const result = await casinoApi.settleMatch(
         selectedMatchToSettle.id,
         winningTeam,
         scoreA,
         scoreB
       );
-      refreshUserData();
-      setSuccess(`تمت تسوية المباراة بنجاح! تم فوز ${result.wonCount} رهانات وتوزيع إجمالي $${result.totalPayout.toLocaleString()}`);
+      await refreshUserData();
+      await loadData();
+      setSuccess(`تمت تسوية المباراة بنجاح! تم فوز ${result.won_count} رهانات وتوزيع إجمالي $${result.total_paid.toLocaleString()}`);
       setTimeout(() => {
         setSettleModal(false);
         setSelectedMatchToSettle(null);
@@ -184,203 +230,205 @@ export const OwnerDashboard: React.FC = () => {
 
   return (
     <div className="py-8 px-4 lg:px-8 max-w-7xl mx-auto space-y-8">
-      {/* Top Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-amber-500/30">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-amber-500/20">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/50 flex items-center justify-center text-amber-400 shadow-lg shadow-amber-500/10">
-            <Crown className="w-7 h-7" />
+          <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+            <Crown className="w-6 h-6" />
           </div>
           <div>
             <h2 className="text-2xl sm:text-3xl font-black font-cinzel text-white">
               لوحة تحكم <span className="gold-gradient-text">المالك (Owner)</span>
             </h2>
-            <p className="text-xs text-zinc-400">الإدارة المركزية، الخزينة، المشرفين، وتسوية نتائج المباريات</p>
+            <p className="text-xs text-zinc-400">
+              التحكم في الخزينة المركزية، إدارة المشرفين، وإضافة وتسوية المباريات
+            </p>
           </div>
         </div>
 
-        {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => setNewAdminModal(true)}
-            className="px-4 py-2.5 rounded-xl font-bold text-black bg-gradient-to-r from-amber-300 via-amber-400 to-amber-500 hover:from-amber-200 hover:to-amber-400 transition-all text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20"
+            onClick={() => setNewMatchModal(true)}
+            className="px-4 py-2.5 rounded-xl font-bold text-black bg-amber-500 hover:bg-amber-400 transition-all text-xs shadow-lg shadow-amber-500/20 flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
-            <span>تعيين مشرف جديد</span>
-          </button>
-          <button
-            onClick={() => setNewMatchModal(true)}
-            className="px-4 py-2.5 rounded-xl font-bold text-amber-300 bg-zinc-900 border border-amber-500/40 hover:border-amber-400 transition-all text-xs flex items-center gap-1.5"
-          >
-            <Trophy className="w-4 h-4" />
             <span>إضافة مباراة رياضية</span>
           </button>
+          <button
+            onClick={() => setNewAdminModal(true)}
+            className="px-4 py-2.5 rounded-xl font-bold text-white bg-zinc-800 hover:bg-zinc-700 transition-all text-xs border border-zinc-700 flex items-center gap-2"
+          >
+            <Shield className="w-4 h-4 text-emerald-400" />
+            <span>تعيين مشرف جديد</span>
+          </button>
         </div>
       </div>
 
-      {/* High-Level Overview Metrics */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="p-5 rounded-3xl bg-gradient-to-br from-[#1c1a24] to-[#121218] border border-amber-500/40 col-span-2 sm:col-span-1 shadow-xl">
-          <span className="text-[11px] font-bold text-amber-400 block mb-1">خزينة المالك الرئيسية</span>
-          <span className="text-2xl lg:text-3xl font-black font-mono text-amber-300">
-            ${ownerBalance.toLocaleString('en-US', { minimumFractionDigits: 0 })}
-          </span>
-          <p className="text-[10px] text-zinc-500 mt-1">Virtual Treasury Reserves</p>
+      {/* Primary Treasury Metric */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+        <div className="p-6 rounded-3xl bg-gradient-to-br from-amber-500/20 to-amber-950/30 border border-amber-500/40 relative overflow-hidden sm:col-span-2">
+          <div className="text-xs text-amber-300 font-bold uppercase tracking-wider mb-1 flex items-center gap-2">
+            <DollarSign className="w-4 h-4" />
+            <span>الخزينة المركزية الافتراضية (Owner Treasury)</span>
+          </div>
+          <div className="text-4xl sm:text-5xl font-black font-mono text-white mt-2">
+            ${ownerBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          </div>
+          <p className="text-xs text-zinc-400 mt-2">
+            المصدر الحصري الوحيد لضخ الرصيد إلى المشرفين داخل النظام
+          </p>
         </div>
 
-        <div className="p-5 rounded-3xl bg-[#121218] border border-zinc-800 shadow-xl">
-          <span className="text-[11px] font-bold text-zinc-400 block mb-1">المشرفين (Admins)</span>
-          <span className="text-2xl lg:text-3xl font-black font-mono text-white">{admins.length}</span>
-          <p className="text-[10px] text-zinc-500 mt-1">مشرفين معتمدين</p>
+        <div className="p-6 rounded-3xl bg-[#121218] border border-zinc-800">
+          <div className="text-xs text-zinc-400 font-medium mb-1">عدد المشرفين المعتمدين</div>
+          <div className="text-3xl font-black font-mono text-emerald-400">{admins.length}</div>
+          <div className="text-[11px] text-zinc-500 mt-2">يمتلكون صلاحية شحن اللاعبين</div>
         </div>
 
-        <div className="p-5 rounded-3xl bg-[#121218] border border-zinc-800 shadow-xl">
-          <span className="text-[11px] font-bold text-zinc-400 block mb-1">إجمالي اللاعبين</span>
-          <span className="text-2xl lg:text-3xl font-black font-mono text-white">{players.length}</span>
-          <p className="text-[10px] text-zinc-500 mt-1">حسابات نشطة</p>
-        </div>
-
-        <div className="p-5 rounded-3xl bg-[#121218] border border-zinc-800 shadow-xl">
-          <span className="text-[11px] font-bold text-zinc-400 block mb-1">المباريات المتاحة</span>
-          <span className="text-2xl lg:text-3xl font-black font-mono text-emerald-400">
+        <div className="p-6 rounded-3xl bg-[#121218] border border-zinc-800">
+          <div className="text-xs text-zinc-400 font-medium mb-1">المباريات المفتوحة</div>
+          <div className="text-3xl font-black font-mono text-amber-400">
             {matches.filter((m) => m.status === 'open').length}
-          </span>
-          <p className="text-[10px] text-zinc-500 mt-1">من أصل {matches.length} مباريات</p>
-        </div>
-
-        <div className="p-5 rounded-3xl bg-[#121218] border border-zinc-800 shadow-xl">
-          <span className="text-[11px] font-bold text-zinc-400 block mb-1">الرهانات النشطة</span>
-          <span className="text-2xl lg:text-3xl font-black font-mono text-amber-400">
-            {allBets.filter((b) => b.status === 'pending').length}
-          </span>
-          <p className="text-[10px] text-zinc-500 mt-1">في انتظار نتائج المباريات</p>
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-2">جاهزة للمراهنة</div>
         </div>
       </div>
 
-      {/* Tabs Navigation */}
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 text-xs font-semibold">
+      {/* Tabs */}
+      <div className="flex items-center gap-2 border-b border-zinc-800 pb-3">
         <button
           onClick={() => setActiveTab('admins')}
-          className={`px-4 py-2 rounded-xl transition-all flex items-center gap-2 ${
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
             activeTab === 'admins'
-              ? 'bg-amber-500 text-black font-bold shadow-md'
+              ? 'bg-amber-500 text-black shadow-md'
               : 'text-zinc-400 hover:text-white bg-zinc-900/60'
           }`}
         >
           <Shield className="w-4 h-4" />
-          <span>إدارة المشرفين ({admins.length})</span>
+          <span>المشرفون والأرصدة ({admins.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('matches')}
-          className={`px-4 py-2 rounded-xl transition-all flex items-center gap-2 ${
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
             activeTab === 'matches'
-              ? 'bg-amber-500 text-black font-bold shadow-md'
+              ? 'bg-amber-500 text-black shadow-md'
               : 'text-zinc-400 hover:text-white bg-zinc-900/60'
           }`}
         >
           <Trophy className="w-4 h-4" />
-          <span>المباريات والتسوية ({matches.length})</span>
+          <span>إدارة وتسوية المباريات ({matches.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('games')}
-          className={`px-4 py-2 rounded-xl transition-all flex items-center gap-2 ${
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
             activeTab === 'games'
-              ? 'bg-amber-500 text-black font-bold shadow-md'
+              ? 'bg-amber-500 text-black shadow-md'
               : 'text-zinc-400 hover:text-white bg-zinc-900/60'
           }`}
         >
           <Gamepad2 className="w-4 h-4" />
-          <span>إعدادات الألعاب ({games.length})</span>
+          <span>كتالوج الألعاب ({games.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('sql')}
-          className={`px-4 py-2 rounded-xl transition-all flex items-center gap-2 ${
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
             activeTab === 'sql'
-              ? 'bg-amber-500 text-black font-bold shadow-md'
+              ? 'bg-amber-500 text-black shadow-md'
               : 'text-zinc-400 hover:text-white bg-zinc-900/60'
           }`}
         >
           <FileCode className="w-4 h-4" />
-          <span>كود Supabase SQL</span>
+          <span>سكريبت SQL الحقيقي</span>
         </button>
       </div>
 
       {/* Tab 1: Admins Management */}
       {activeTab === 'admins' && (
-        <div className="rounded-3xl bg-[#121218] border border-zinc-800 p-6 shadow-xl">
-          <div className="flex items-center justify-between mb-4 pb-3 border-b border-zinc-800">
-            <h3 className="text-base font-bold text-white">قائمة المشرفين المعتمدين</h3>
+        <div className="rounded-3xl bg-[#121218] border border-zinc-800 p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-amber-400" />
+              <h3 className="text-lg font-bold text-white">قائمة المشرفين المعتمدين</h3>
+            </div>
             <span className="text-xs text-zinc-400">يمكن للمشرفين شحن حسابات اللاعبين حصراً من أرصدتهم</span>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-xs">
-              <thead>
-                <tr className="text-zinc-400 border-b border-zinc-800 pb-2">
-                  <th className="py-3 px-4">اسم المشرف</th>
-                  <th className="py-3 px-4">اسم المستخدم</th>
-                  <th className="py-3 px-4">البريد الإلكتروني</th>
-                  <th className="py-3 px-4">رصيد المشرف</th>
-                  <th className="py-3 px-4">الحالة</th>
-                  <th className="py-3 px-4 text-center">إجراءات المالك</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800/60">
-                {admins.map((adm) => {
-                  const admWallet = casinoEngine.getWallet(adm.id);
-                  return (
-                    <tr key={adm.id} className="hover:bg-zinc-900/50">
-                      <td className="py-3.5 px-4 font-bold text-white flex items-center gap-2">
-                        <Shield className="w-4 h-4 text-emerald-400" />
-                        <span>{adm.full_name}</span>
-                      </td>
-                      <td className="py-3.5 px-4 font-mono text-zinc-400">@{adm.username}</td>
-                      <td className="py-3.5 px-4 text-zinc-400">{adm.email}</td>
-                      <td className="py-3.5 px-4 font-bold font-mono text-emerald-400 text-sm">
-                        ${admWallet.balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                          {adm.status}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-center">
-                        <button
-                          onClick={() => {
-                            setSelectedAdminId(adm.id);
-                            setTopUpAmount(5000);
-                            setTopUpModal(true);
-                          }}
-                          className="px-3 py-1.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500 hover:text-black font-bold transition-all inline-flex items-center gap-1 text-xs"
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                          <span>تغذية رصيد</span>
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          {loading ? (
+            <div className="text-center py-12">
+              <RefreshCw className="w-8 h-8 text-amber-400 animate-spin mx-auto mb-2" />
+              <p className="text-xs text-zinc-400">جاري تحميل بيانات المشرفين...</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-right text-xs">
+                <thead>
+                  <tr className="text-zinc-400 border-b border-zinc-800 pb-2">
+                    <th className="py-3 px-4">اسم المشرف</th>
+                    <th className="py-3 px-4">اسم المستخدم</th>
+                    <th className="py-3 px-4">البريد الإلكتروني</th>
+                    <th className="py-3 px-4">رصيد المشرف</th>
+                    <th className="py-3 px-4">الحالة</th>
+                    <th className="py-3 px-4 text-center">إجراءات المالك</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/60">
+                  {admins.map((adm) => {
+                    const admWallet = allWallets.find((w) => w.user_id === adm.id) || { balance: 0 };
+                    return (
+                      <tr key={adm.id} className="hover:bg-zinc-900/50">
+                        <td className="py-3.5 px-4 font-bold text-white flex items-center gap-2">
+                          <Shield className="w-4 h-4 text-emerald-400" />
+                          <span>{adm.full_name}</span>
+                        </td>
+                        <td className="py-3.5 px-4 font-mono text-zinc-400">@{adm.username}</td>
+                        <td className="py-3.5 px-4 text-zinc-400">{adm.email}</td>
+                        <td className="py-3.5 px-4 font-bold font-mono text-emerald-400 text-sm">
+                          ${Number(admWallet.balance).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                            {adm.status}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          <button
+                            onClick={() => {
+                              setSelectedAdminId(adm.id);
+                              setTopUpAmount(5000);
+                              setTopUpModal(true);
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500 hover:text-black font-bold transition-all inline-flex items-center gap-1 text-xs"
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                            <span>تغذية رصيد</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Tab 2: Matches & Settlement Management */}
+      {/* Tab 2: Matches Management & Settlement */}
       {activeTab === 'matches' && (
-        <div className="rounded-3xl bg-[#121218] border border-zinc-800 p-6 shadow-xl space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+        <div className="rounded-3xl bg-[#121218] border border-zinc-800 p-6">
+          <div className="flex items-center justify-between mb-6">
             <div>
-              <h3 className="text-base font-bold text-white">إدارة وتسوية المباريات الرياضية</h3>
+              <h3 className="text-lg font-bold text-white">إدارة المباريات وتسوية النتائج</h3>
               <p className="text-xs text-zinc-400">
-                تسوية نتائج المباريات تشغل دالة RPC الذرية لتوزيع أرباح الرهانات الفائزة فورياً
+                تسوية المباراة تقوم آلياً بتحديد الفائزين وتوزيع الأرباح على محافظ اللاعبين
               </p>
             </div>
             <button
               onClick={() => setNewMatchModal(true)}
-              className="px-3.5 py-2 rounded-xl bg-amber-500 text-black font-bold text-xs flex items-center gap-1"
+              className="px-3.5 py-2 rounded-xl bg-amber-500 text-black font-bold text-xs flex items-center gap-1.5"
             >
               <Plus className="w-4 h-4" />
               <span>مباراة جديدة</span>
@@ -393,35 +441,35 @@ export const OwnerDashboard: React.FC = () => {
                 <tr className="text-zinc-400 border-b border-zinc-800 pb-2">
                   <th className="py-3 px-4">البطولة</th>
                   <th className="py-3 px-4">الفريقين</th>
-                  <th className="py-3 px-4">المعاملات (1 / X / 2)</th>
+                  <th className="py-3 px-4">المعاملات (1 - X - 2)</th>
                   <th className="py-3 px-4">الحالة</th>
                   <th className="py-3 px-4">النتيجة</th>
-                  <th className="py-3 px-4 text-center">التسوية الفورية</th>
+                  <th className="py-3 px-4 text-center">تسوية النتيجة</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60">
                 {matches.map((m) => (
                   <tr key={m.id} className="hover:bg-zinc-900/50">
-                    <td className="py-3.5 px-4 text-amber-300 font-semibold">{m.league}</td>
+                    <td className="py-3.5 px-4 font-medium text-amber-400">{m.league}</td>
                     <td className="py-3.5 px-4 font-bold text-white">
-                      {m.team_a} ضد {m.team_b}
+                      {m.team_a} <span className="text-zinc-500">vs</span> {m.team_b}
                     </td>
-                    <td className="py-3.5 px-4 font-mono text-zinc-300">
-                      {m.odds_team_a} | {m.odds_draw || 3.0} | {m.odds_team_b}
+                    <td className="py-3.5 px-4 font-mono">
+                      {m.odds_team_a} | {m.odds_draw} | {m.odds_team_b}
                     </td>
                     <td className="py-3.5 px-4">
                       <span
                         className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                           m.status === 'open'
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                            : 'bg-zinc-800 text-zinc-400'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                            : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
                         }`}
                       >
                         {m.status === 'open' ? 'مفتوحة للرهان' : 'تمت التسوية'}
                       </span>
                     </td>
                     <td className="py-3.5 px-4 font-mono font-bold text-white">
-                      {m.status === 'settled' ? `${m.score_team_a} - ${m.score_team_b}` : '—'}
+                      {m.status === 'settled' ? `${m.score_team_a ?? m.score_a ?? 0} - ${m.score_team_b ?? m.score_b ?? 0}` : '-'}
                     </td>
                     <td className="py-3.5 px-4 text-center">
                       {m.status === 'open' ? (
@@ -433,12 +481,13 @@ export const OwnerDashboard: React.FC = () => {
                             setScoreB(1);
                             setSettleModal(true);
                           }}
-                          className="px-3 py-1.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500 hover:text-black font-bold transition-all text-xs"
+                          className="px-3 py-1.5 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500 hover:text-black font-bold text-xs inline-flex items-center gap-1 transition-all"
                         >
-                          ⚖️ تسوية المباراة
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>تسوية النتيجة الآن</span>
                         </button>
                       ) : (
-                        <span className="text-zinc-500 text-[11px]">مكتملة</span>
+                        <span className="text-zinc-500 text-[11px]">مكتملة وموزعة</span>
                       )}
                     </td>
                   </tr>
@@ -449,139 +498,98 @@ export const OwnerDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 3: Games Settings */}
+      {/* Tab 3: Games Catalog */}
       {activeTab === 'games' && (
-        <div className="rounded-3xl bg-[#121218] border border-zinc-800 p-6 shadow-xl space-y-4">
-          <h3 className="text-base font-bold text-white mb-2">إعدادات ألعاب الكازينو</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {games.map((gm) => (
-              <div
-                key={gm.id}
-                className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 flex items-center justify-between"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center text-xl">
-                    🎮
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-white text-sm">{gm.name}</h4>
-                    <p className="text-[11px] text-zinc-400">
-                      الرهان: ${gm.minimum_bet} - ${gm.maximum_bet}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                      gm.status === 'active'
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : 'bg-zinc-800 text-zinc-400'
-                    }`}
-                  >
-                    {gm.status}
-                  </span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {games.map((g) => (
+            <div key={g.id} className="p-5 rounded-3xl bg-[#121218] border border-zinc-800 flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-3xl shrink-0">
+                {g.slug === 'golden-slots' ? '🦁' : g.slug === 'lucky-wheel' ? '🎡' : g.slug === 'dice-room' ? '🎲' : '🪙'}
+              </div>
+              <div className="flex-1">
+                <h4 className="font-bold text-white text-base">{g.name}</h4>
+                <p className="text-xs text-zinc-400 mt-0.5">{g.description}</p>
+                <div className="flex items-center gap-3 mt-2 text-[11px] text-zinc-400 font-mono">
+                  <span>RTP: {Number(g.rtp_percentage ?? 96)}%</span>
+                  <span>•</span>
+                  <span>الحد الأدنى: ${Number(g.minimum_bet ?? g.min_bet ?? 1)}</span>
+                  <span>•</span>
+                  <span>الحد الأقصى: ${Number(g.maximum_bet ?? g.max_bet ?? 1000)}</span>
                 </div>
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
       )}
 
       {/* Tab 4: SQL Migration */}
       {activeTab === 'sql' && (
-        <div className="rounded-3xl bg-[#121218] border border-zinc-800 p-6 shadow-xl space-y-4">
+        <div className="rounded-3xl bg-[#121218] border border-zinc-800 p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-base font-bold text-white">كود ترحيل قاعدة بيانات Supabase (SQL Migration)</h3>
+              <h3 className="text-lg font-bold text-white">ملف SQL الكامل لقاعدة البيانات (Supabase PostgreSQL)</h3>
               <p className="text-xs text-zinc-400">
-                انسخ هذا الكود والصقه في محرّر SQL في لوحة تحكم Supabase لتشغيل المنصة فعلياً بالكامل.
+                يحتوي على الدوال الذرية (Atomic RPCs) وقفل الأسطر (SELECT FOR UPDATE) وسياسات RLS
               </p>
             </div>
             <button
               onClick={handleCopySql}
-              className="px-4 py-2 rounded-xl bg-amber-500 text-black font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20"
+              className="px-4 py-2 rounded-xl bg-amber-500 text-black font-bold text-xs flex items-center gap-2 hover:bg-amber-400 transition-all"
             >
               {copiedSql ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-              <span>{copiedSql ? 'تم النسخ!' : 'نسخ كود SQL كامل'}</span>
+              <span>{copiedSql ? 'تم النسخ!' : 'نسخ كود SQL الكامل'}</span>
             </button>
           </div>
-
-          <div className="rounded-2xl bg-black/80 border border-zinc-800 p-4 font-mono text-[11px] text-zinc-300 max-h-[350px] overflow-y-auto ltr text-left">
-            <pre>{MIGRATION_SQL_SAMPLE}</pre>
-          </div>
+          <pre className="p-4 rounded-2xl bg-black border border-zinc-800 text-[11px] font-mono text-zinc-300 overflow-x-auto max-h-96 ltr text-left">
+            {MIGRATION_SQL_SAMPLE}
+          </pre>
         </div>
       )}
 
-      {/* New Admin Modal */}
+      {/* Modal: Promote Admin */}
       {newAdminModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
           <div className="relative w-full max-w-md rounded-3xl bg-[#121218] border border-amber-500/40 p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
-              <div className="flex items-center gap-2 text-white">
-                <Crown className="w-5 h-5 text-amber-400" />
-                <h3 className="font-bold text-lg">تعيين مشرف جديد (Admin)</h3>
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-bold text-lg text-white">ترقية مستخدم إلى مشرف (Admin)</h3>
               </div>
-              <button
-                onClick={() => setNewAdminModal(false)}
-                className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800"
-              >
+              <button onClick={() => setNewAdminModal(false)} className="p-1.5 rounded-xl text-zinc-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateAdmin} className="space-y-4 my-4">
+            <form onSubmit={handlePromoteAdmin} className="space-y-4 mt-4">
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">الاسم الكامل:</label>
-                <input
-                  type="text"
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">اختر اللاعب للترقية:</label>
+                <select
+                  value={selectedUserToPromote}
+                  onChange={(e) => setSelectedUserToPromote(e.target.value)}
                   required
-                  placeholder="مثال: خالد المنصوري"
-                  value={adminFullName}
-                  onChange={(e) => setAdminFullName(e.target.value)}
-                  className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs focus:outline-none focus:border-amber-400"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">اسم المستخدم:</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="admin_khalid"
-                  value={adminUsername}
-                  onChange={(e) => setAdminUsername(e.target.value)}
-                  className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs focus:outline-none focus:border-amber-400"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">البريد الإلكتروني:</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="admin@5lion.casino"
-                  value={adminEmail}
-                  onChange={(e) => setAdminEmail(e.target.value)}
-                  className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs focus:outline-none focus:border-amber-400 text-left"
-                />
+                  className="w-full py-2.5 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs focus:outline-none focus:border-amber-400"
+                >
+                  <option value="">-- اختر مستخدم --</option>
+                  {players.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.full_name} (@{p.username}) - {p.email}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1">
-                  الرصيد الافتراضي الأولي للمشرف ($):
+                  الرصيد الأولي المخصص من الخزينة ($):
                 </label>
                 <input
                   type="number"
-                  min="100"
+                  min="0"
                   max={ownerBalance}
                   value={adminInitialBalance}
                   onChange={(e) => setAdminInitialBalance(Number(e.target.value))}
-                  className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white font-mono text-sm focus:outline-none focus:border-amber-400 text-right"
+                  className="w-full py-2.5 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs font-mono focus:outline-none focus:border-amber-400 text-left ltr"
                 />
-                <span className="text-[11px] text-zinc-500 mt-1 block">
-                  رصيد خزينة المالك المتاح: ${ownerBalance.toLocaleString()}
-                </span>
               </div>
 
               {error && (
@@ -590,6 +598,7 @@ export const OwnerDashboard: React.FC = () => {
                   <span>{error}</span>
                 </div>
               )}
+
               {success && (
                 <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -597,65 +606,63 @@ export const OwnerDashboard: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setNewAdminModal(false)}
-                  className="flex-1 py-2.5 rounded-xl bg-zinc-900 text-zinc-400 hover:bg-zinc-800 text-xs font-semibold"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-2 py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shadow-lg shadow-amber-500/20 disabled:opacity-50 flex items-center justify-center gap-1.5"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>جاري الإنشاء...</span>
-                    </>
-                  ) : (
-                    <span>إنشاء المشرف وتخصيص الرصيد</span>
-                  )}
-                </button>
-              </div>
+              <button
+                type="submit"
+                disabled={isSubmitting || !selectedUserToPromote}
+                className="w-full py-3 rounded-xl font-bold text-black bg-amber-500 hover:bg-amber-400 transition-all text-sm shadow-md shadow-amber-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isSubmitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <span>تأكيد الترقية وتخصيص الرصيد</span>}
+              </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Top Up Admin Modal */}
+      {/* Modal: Top Up Admin Balance */}
       {topUpModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
           <div className="relative w-full max-w-md rounded-3xl bg-[#121218] border border-amber-500/40 p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
-              <div className="flex items-center gap-2 text-white">
+              <div className="flex items-center gap-2">
                 <Send className="w-5 h-5 text-amber-400" />
-                <h3 className="font-bold text-lg">تغذية رصيد المشرف من الخزينة</h3>
+                <h3 className="font-bold text-lg text-white">تغذية رصيد المشرف من الخزينة</h3>
               </div>
-              <button
-                onClick={() => setTopUpModal(false)}
-                className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800"
-              >
+              <button onClick={() => setTopUpModal(false)} className="p-1.5 rounded-xl text-zinc-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleTopUpAdmin} className="space-y-4 my-4">
+            <form onSubmit={handleTopUpAdmin} className="space-y-4 mt-4">
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">المبلغ المراد إضافته ($):</label>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">المشرف المستهدف:</label>
+                <select
+                  value={selectedAdminId}
+                  onChange={(e) => setSelectedAdminId(e.target.value)}
+                  className="w-full py-2.5 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs focus:outline-none focus:border-amber-400"
+                >
+                  {admins.map((a) => {
+                    const aw = allWallets.find((w) => w.user_id === a.id) || { balance: 0 };
+                    return (
+                      <option key={a.id} value={a.id}>
+                        {a.full_name} (@{a.username}) - الرصيد الحالي: ${Number(aw.balance).toLocaleString()}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                  مبلغ التحويل ($) - رصيد الخزينة المتاح: ${ownerBalance.toLocaleString()}
+                </label>
                 <input
                   type="number"
                   min="1"
                   max={ownerBalance}
                   value={topUpAmount}
                   onChange={(e) => setTopUpAmount(Number(e.target.value))}
-                  className="w-full py-2.5 px-4 rounded-xl bg-zinc-900 border border-zinc-700 text-white font-mono text-sm focus:outline-none focus:border-amber-400 text-right"
+                  className="w-full py-2.5 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs font-mono focus:outline-none focus:border-amber-400 text-left ltr"
                 />
-                <span className="text-[11px] text-zinc-500 mt-1 block">
-                  رصيد الخزينة المتاح: ${ownerBalance.toLocaleString()}
-                </span>
               </div>
 
               {error && (
@@ -664,6 +671,7 @@ export const OwnerDashboard: React.FC = () => {
                   <span>{error}</span>
                 </div>
               )}
+
               {success && (
                 <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -671,190 +679,35 @@ export const OwnerDashboard: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setTopUpModal(false)}
-                  className="flex-1 py-2.5 rounded-xl bg-zinc-900 text-zinc-400 hover:bg-zinc-800 text-xs font-semibold"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting || ownerBalance < topUpAmount}
-                  className="flex-2 py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shadow-lg shadow-amber-500/20 disabled:opacity-50 flex items-center justify-center gap-1.5"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>جاري المعالجة...</span>
-                    </>
-                  ) : (
-                    <span>تأكيد الإضافة (${topUpAmount.toLocaleString()})</span>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Settle Match Modal */}
-      {settleModal && selectedMatchToSettle && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
-          <div className="relative w-full max-w-md rounded-3xl bg-[#121218] border border-amber-500/40 p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
-              <div className="flex items-center gap-2 text-white">
-                <Trophy className="w-5 h-5 text-amber-400" />
-                <h3 className="font-bold text-lg">تسوية وتوزيع أرباح المباراة</h3>
-              </div>
               <button
-                onClick={() => setSettleModal(false)}
-                className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800"
+                type="submit"
+                disabled={isSubmitting || ownerBalance < topUpAmount}
+                className="w-full py-3 rounded-xl font-bold text-black bg-amber-500 hover:bg-amber-400 transition-all text-sm shadow-md shadow-amber-500/20 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                <X className="w-5 h-5" />
+                {isSubmitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <span>تحويل الرصيد الآن</span>}
               </button>
-            </div>
-
-            <form onSubmit={handleSettleMatch} className="space-y-4 my-4">
-              <div className="p-3 bg-zinc-900/80 rounded-2xl border border-zinc-800 text-xs">
-                <span className="text-zinc-400 block mb-1">المباراة المحددة:</span>
-                <span className="text-white font-bold text-sm">
-                  {selectedMatchToSettle.team_a} ضد {selectedMatchToSettle.team_b}
-                </span>
-              </div>
-
-              {/* Select Winner */}
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">
-                  الفريق الفائز رسمياً:
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setWinningTeam('team_a')}
-                    className={`p-2.5 rounded-xl text-xs font-bold transition-all ${
-                      winningTeam === 'team_a'
-                        ? 'bg-amber-500 text-black shadow-md'
-                        : 'bg-zinc-900 text-zinc-300 border border-zinc-800'
-                    }`}
-                  >
-                    {selectedMatchToSettle.team_a}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWinningTeam('draw')}
-                    className={`p-2.5 rounded-xl text-xs font-bold transition-all ${
-                      winningTeam === 'draw'
-                        ? 'bg-amber-500 text-black shadow-md'
-                        : 'bg-zinc-900 text-zinc-300 border border-zinc-800'
-                    }`}
-                  >
-                    التعادل (Draw)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWinningTeam('team_b')}
-                    className={`p-2.5 rounded-xl text-xs font-bold transition-all ${
-                      winningTeam === 'team_b'
-                        ? 'bg-amber-500 text-black shadow-md'
-                        : 'bg-zinc-900 text-zinc-300 border border-zinc-800'
-                    }`}
-                  >
-                    {selectedMatchToSettle.team_b}
-                  </button>
-                </div>
-              </div>
-
-              {/* Score inputs */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-400 mb-1">
-                    أهداف {selectedMatchToSettle.team_a}:
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={scoreA}
-                    onChange={(e) => setScoreA(Number(e.target.value))}
-                    className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white font-mono text-center font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-400 mb-1">
-                    أهداف {selectedMatchToSettle.team_b}:
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={scoreB}
-                    onChange={(e) => setScoreB(Number(e.target.value))}
-                    className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white font-mono text-center font-bold"
-                  />
-                </div>
-              </div>
-
-              {error && (
-                <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{error}</span>
-                </div>
-              )}
-              {success && (
-                <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>{success}</span>
-                </div>
-              )}
-
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setSettleModal(false)}
-                  className="flex-1 py-2.5 rounded-xl bg-zinc-900 text-zinc-400 hover:bg-zinc-800 text-xs font-semibold"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-2 py-2.5 px-5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-black font-bold text-xs shadow-lg shadow-amber-500/20 disabled:opacity-50 flex items-center justify-center gap-1.5"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>جاري التسوية...</span>
-                    </>
-                  ) : (
-                    <span>تأكيد التسوية وتوزيع الأرباح</span>
-                  )}
-                </button>
-              </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* New Match Modal */}
+      {/* Modal: New Match */}
       {newMatchModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
           <div className="relative w-full max-w-md rounded-3xl bg-[#121218] border border-amber-500/40 p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
-              <div className="flex items-center gap-2 text-white">
+              <div className="flex items-center gap-2">
                 <Trophy className="w-5 h-5 text-amber-400" />
-                <h3 className="font-bold text-lg">إضافة مباراة رياضية جديدة</h3>
+                <h3 className="font-bold text-lg text-white">إضافة مباراة جديدة</h3>
               </div>
-              <button
-                onClick={() => setNewMatchModal(false)}
-                className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800"
-              >
+              <button onClick={() => setNewMatchModal(false)} className="p-1.5 rounded-xl text-zinc-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateMatch} className="space-y-3 my-4">
+            <form onSubmit={handleCreateMatch} className="space-y-3 mt-4">
               <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">البطولة / الدوري:</label>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">اسم البطولة:</label>
                 <input
                   type="text"
                   required
@@ -864,7 +717,7 @@ export const OwnerDashboard: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-xs font-semibold text-zinc-300 mb-1">الفريق الأول (Team A):</label>
                   <input
@@ -891,50 +744,38 @@ export const OwnerDashboard: React.FC = () => {
 
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-[11px] font-semibold text-zinc-400 mb-1">معامل فوز 1:</label>
+                  <label className="block text-[11px] text-zinc-400 mb-1">معامل A (1):</label>
                   <input
                     type="number"
                     step="0.05"
                     min="1.05"
                     value={oddsA}
                     onChange={(e) => setOddsA(Number(e.target.value))}
-                    className="w-full py-1.5 px-2 rounded-xl bg-zinc-900 border border-zinc-700 text-white font-mono text-center text-xs"
+                    className="w-full py-1.5 px-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white text-xs font-mono text-center"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-zinc-400 mb-1">معامل التعادل X:</label>
+                  <label className="block text-[11px] text-zinc-400 mb-1">معامل التعادل (X):</label>
                   <input
                     type="number"
                     step="0.05"
                     min="1.05"
                     value={oddsDraw}
                     onChange={(e) => setOddsDraw(Number(e.target.value))}
-                    className="w-full py-1.5 px-2 rounded-xl bg-zinc-900 border border-zinc-700 text-white font-mono text-center text-xs"
+                    className="w-full py-1.5 px-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white text-xs font-mono text-center"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-zinc-400 mb-1">معامل فوز 2:</label>
+                  <label className="block text-[11px] text-zinc-400 mb-1">معامل B (2):</label>
                   <input
                     type="number"
                     step="0.05"
                     min="1.05"
                     value={oddsB}
                     onChange={(e) => setOddsB(Number(e.target.value))}
-                    className="w-full py-1.5 px-2 rounded-xl bg-zinc-900 border border-zinc-700 text-white font-mono text-center text-xs"
+                    className="w-full py-1.5 px-2 rounded-lg bg-zinc-900 border border-zinc-700 text-white text-xs font-mono text-center"
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-zinc-300 mb-1">موعد المباراة (بعد كم ساعة):</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="168"
-                  value={matchHoursFromNow}
-                  onChange={(e) => setMatchHoursFromNow(Number(e.target.value))}
-                  className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white font-mono text-xs focus:outline-none focus:border-amber-400 text-right"
-                />
               </div>
 
               {error && (
@@ -943,6 +784,7 @@ export const OwnerDashboard: React.FC = () => {
                   <span>{error}</span>
                 </div>
               )}
+
               {success && (
                 <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -950,29 +792,124 @@ export const OwnerDashboard: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setNewMatchModal(false)}
-                  className="flex-1 py-2.5 rounded-xl bg-zinc-900 text-zinc-400 hover:bg-zinc-800 text-xs font-semibold"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-2 py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs shadow-lg shadow-amber-500/20 disabled:opacity-50 flex items-center justify-center gap-1.5"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>جاري الإضافة...</span>
-                    </>
-                  ) : (
-                    <span>حفظ ونشر المباراة</span>
-                  )}
-                </button>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-3 rounded-xl font-bold text-black bg-amber-500 hover:bg-amber-400 transition-all text-sm shadow-md shadow-amber-500/20 flex items-center justify-center gap-2 mt-2"
+              >
+                {isSubmitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <span>نشر المباراة للمراهنة</span>}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Settle Match */}
+      {settleModal && selectedMatchToSettle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+          <div className="relative w-full max-w-md rounded-3xl bg-[#121218] border border-emerald-500/40 p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-bold text-lg text-white">تسوية نتيجة المباراة وتوزيع الأرباح</h3>
               </div>
+              <button onClick={() => setSettleModal(false)} className="p-1.5 rounded-xl text-zinc-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSettleMatch} className="space-y-4 mt-4">
+              <div className="p-3 bg-zinc-900 rounded-xl text-xs text-center font-bold text-white">
+                {selectedMatchToSettle.team_a} vs {selectedMatchToSettle.team_b}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-2">الفائز الرسمي بالمباراة:</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setWinningTeam('team_a')}
+                    className={`py-2 px-2 rounded-xl text-xs font-bold border transition-all ${
+                      winningTeam === 'team_a'
+                        ? 'bg-emerald-500 text-black border-emerald-400'
+                        : 'bg-zinc-900 text-zinc-300 border-zinc-700'
+                    }`}
+                  >
+                    {selectedMatchToSettle.team_a}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWinningTeam('draw')}
+                    className={`py-2 px-2 rounded-xl text-xs font-bold border transition-all ${
+                      winningTeam === 'draw'
+                        ? 'bg-emerald-500 text-black border-emerald-400'
+                        : 'bg-zinc-900 text-zinc-300 border-zinc-700'
+                    }`}
+                  >
+                    تعادل (Draw)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWinningTeam('team_b')}
+                    className={`py-2 px-2 rounded-xl text-xs font-bold border transition-all ${
+                      winningTeam === 'team_b'
+                        ? 'bg-emerald-500 text-black border-emerald-400'
+                        : 'bg-zinc-900 text-zinc-300 border-zinc-700'
+                    }`}
+                  >
+                    {selectedMatchToSettle.team_b}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                    أهداف {selectedMatchToSettle.team_a}:
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={scoreA}
+                    onChange={(e) => setScoreA(Number(e.target.value))}
+                    className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs text-center font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                    أهداف {selectedMatchToSettle.team_b}:
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={scoreB}
+                    onChange={(e) => setScoreB(Number(e.target.value))}
+                    className="w-full py-2 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs text-center font-mono"
+                  />
+                </div>
+              </div>
+
+              {error && (
+                <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {success && (
+                <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{success}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-3 rounded-xl font-bold text-black bg-emerald-400 hover:bg-emerald-300 transition-all text-sm shadow-md shadow-emerald-500/20 flex items-center justify-center gap-2"
+              >
+                {isSubmitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <span>تأكيد التسوية وحساب الأرباح فوراً</span>}
+              </button>
             </form>
           </div>
         </div>
@@ -1009,4 +946,5 @@ CREATE TABLE IF NOT EXISTS public.wallets (
 ALTER PUBLICATION supabase_realtime ADD TABLE public.wallets;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.wallet_transactions;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.bets;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
 `;

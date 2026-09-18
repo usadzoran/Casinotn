@@ -66,6 +66,9 @@ export interface Game {
   status: 'active' | 'inactive';
   minimum_bet: number;
   maximum_bet: number;
+  min_bet?: number;
+  max_bet?: number;
+  rtp_percentage?: number;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +88,8 @@ export interface Match {
   odds_draw?: number;
   score_team_a?: number | null;
   score_team_b?: number | null;
+  score_a?: number | null;
+  score_b?: number | null;
   winning_team?: 'team_a' | 'team_b' | 'draw' | 'cancelled' | null;
   settled_by?: string | null;
   settled_at?: string | null;
@@ -98,6 +103,7 @@ export interface Bet {
   match_id: string;
   selected_team: 'team_a' | 'team_b' | 'draw';
   bet_amount: number;
+  amount?: number;
   odds: number;
   potential_win: number;
   status: BetStatus;
@@ -151,4 +157,18 @@ export interface ActivityLog {
   ip_address?: string | null;
   created_at: string;
   user?: Profile;
+}
+
+export interface GameHistory {
+  id: string;
+  user_id: string;
+  game_id: string;
+  bet_amount: number;
+  multiplier: number;
+  payout: number;
+  result: 'win' | 'loss';
+  game_data?: Record<string, any>;
+  created_at: string;
+  game?: Game;
+  profile?: Profile;
 }

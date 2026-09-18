@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Header } from './components/Header';
 import { Hero } from './components/Hero';
@@ -14,13 +14,13 @@ import { LoginModal, RegisterModal } from './components/AuthModals';
 import { ConfigModal } from './components/ConfigModal';
 import { NotificationsModal } from './components/NotificationsModal';
 import { ChatModal } from './components/ChatModal';
-import { ScenarioRunnerModal } from './components/ScenarioRunnerModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { casinoEngine } from './lib/supabase';
-import { MessageCircle, Sparkles, Trophy, Crown, Shield, Layers, PlayCircle } from 'lucide-react';
+import { casinoApi, supabase } from './lib/supabase';
+import { Game, Match } from './types/database';
+import { MessageCircle } from 'lucide-react';
 
 const CasinoApp: React.FC = () => {
-  const { user, role, switchDemoRole } = useAuth();
+  const { user, role } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('home');
 
   // Modals
@@ -29,49 +29,56 @@ const CasinoApp: React.FC = () => {
   const [configOpen, setConfigOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
-  const [scenarioOpen, setScenarioOpen] = useState(false);
 
-  // Live Data State from Engine (safely initialized to prevent runtime crashes)
-  const [games, setGames] = useState(() => {
-    try {
-      return casinoEngine?.getGames ? casinoEngine.getGames() : [];
-    } catch (err) {
-      console.warn('Could not load initial games:', err);
-      return [];
-    }
-  });
-  const [matches, setMatches] = useState(() => {
-    try {
-      return casinoEngine?.getMatches ? casinoEngine.getMatches() : [];
-    } catch (err) {
-      console.warn('Could not load initial matches:', err);
-      return [];
-    }
-  });
+  // Live Data State directly from Supabase
+  const [games, setGames] = useState<Game[]>([]);
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [loadingCatalog, setLoadingCatalog] = useState(true);
 
-  useEffect(() => {
+  const fetchCatalogData = useCallback(async () => {
     try {
-      const unsub = casinoEngine?.subscribe?.(() => {
-        try {
-          setGames(casinoEngine.getGames ? [...casinoEngine.getGames()] : []);
-          setMatches(casinoEngine.getMatches ? [...casinoEngine.getMatches()] : []);
-        } catch {
-          // ignore
-        }
-      });
-      return () => unsub?.();
+      const [gamesData, matchesData] = await Promise.all([
+        casinoApi.getGames(),
+        casinoApi.getMatches(),
+      ]);
+      setGames(gamesData);
+      setMatches(matchesData);
     } catch (err) {
-      console.warn('Engine subscription failed:', err);
+      console.warn('[5LION CASINO] Failed to fetch catalog data:', err);
+    } finally {
+      setLoadingCatalog(false);
     }
   }, []);
 
+  useEffect(() => {
+    fetchCatalogData();
+
+    // Supabase Realtime for Matches and Games
+    const channel = supabase
+      .channel('public-catalog-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'matches' },
+        () => {
+          casinoApi.getMatches().then(setMatches);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'games' },
+        () => {
+          casinoApi.getGames().then(setGames);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchCatalogData]);
+
   const handleRefresh = () => {
-    try {
-      setGames(casinoEngine.getGames ? [...casinoEngine.getGames()] : []);
-      setMatches(casinoEngine.getMatches ? [...casinoEngine.getMatches()] : []);
-    } catch (err) {
-      console.warn('Refresh failed:', err);
-    }
+    fetchCatalogData();
   };
 
   return (
@@ -85,29 +92,6 @@ const CasinoApp: React.FC = () => {
         openConfigModal={() => setConfigOpen(true)}
         openNotifModal={() => setNotifOpen(true)}
       />
-
-      {/* Role Testing Announcement Banner */}
-      <div className="bg-gradient-to-r from-amber-500/10 via-amber-600/15 to-amber-500/10 border-b border-amber-500/20 px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-amber-300 mx-auto sm:mx-0">
-          <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-          <span>
-            أنت تتصفح حالياً بدور: <strong className="uppercase underline text-white">{role || 'زائر'}</strong>
-          </span>
-          <span className="text-zinc-500">•</span>
-          <span className="text-zinc-400 hidden md:inline">
-            يمكنك التبديل الفوري بين (المالك / المشرف / اللاعب) من الشريط العلوي لتجربة سيناريو الشحن والرهان كاملاً.
-          </span>
-        </div>
-
-        {/* 13-Step Scenario Launcher Button */}
-        <button
-          onClick={() => setScenarioOpen(true)}
-          className="mx-auto sm:mx-0 px-3 py-1 rounded-full bg-amber-500 text-black font-bold text-[11px] hover:bg-amber-400 shadow-md shadow-amber-500/20 flex items-center gap-1.5 transition-transform hover:scale-105"
-        >
-          <PlayCircle className="w-3.5 h-3.5 fill-black" />
-          <span>محاكاة سيناريو الـ 13 خطوة المعتمد</span>
-        </button>
-      </div>
 
       {/* Main Views */}
       <main className="flex-1 pb-16 md:pb-0">
@@ -174,12 +158,6 @@ const CasinoApp: React.FC = () => {
       <ChatModal
         isOpen={chatOpen}
         onClose={() => setChatOpen(false)}
-      />
-
-      <ScenarioRunnerModal
-        isOpen={scenarioOpen}
-        onClose={() => setScenarioOpen(false)}
-        onNavigateToTab={(tab) => setActiveTab(tab)}
       />
 
       {/* Footer */}

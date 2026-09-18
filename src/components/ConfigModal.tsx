@@ -51,11 +51,10 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose }) => 
           <div className="p-4 rounded-2xl bg-[#1a1924] border border-amber-500/20 text-xs text-zinc-300 space-y-2">
             <div className="flex items-center gap-2 text-amber-300 font-bold">
               <CheckCircle2 className="w-4 h-4" />
-              <span>حالة النظام: النظام جاهز للعمل مع Supabase محلياً ومباشرة!</span>
+              <span>حالة النظام: منصة 5LION متصلة بـ Supabase كمصدر وحيد للحقيقة!</span>
             </div>
             <p>
-              النظام مزود بمحرك محاكاة ذري مطابق لدوال PostgreSQL (`CasinoEngine`) مع كامل قفل الصفوف وقواعد الأمان.
-              لربطه بمشروعك الحقيقي على Supabase، أدخل بيانات المشروع أدناه بعد تطبيق كود SQL في لوحة التحكم.
+              جميع العمليات المالية (التحويلات، الرهانات، تسوية المباريات، الألعاب) تُنفذ عبر دوال PostgreSQL الذرية (RPC) مع حماية RLS وقفل الصفوف FOR UPDATE.
             </p>
           </div>
 

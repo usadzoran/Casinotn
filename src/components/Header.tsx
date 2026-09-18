@@ -34,7 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   openConfigModal,
   openNotifModal,
 }) => {
-  const { user, wallet, role, logout, switchDemoRole, unreadNotificationsCount, isSupabaseConnected } = useAuth();
+  const { user, wallet, role, logout, unreadNotificationsCount, isSupabaseConnected } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
@@ -152,43 +152,8 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </nav>
 
-        {/* Right Section: Balance, Demo Switcher, Notifications, Auth */}
+        {/* Right Section: Balance, Notifications, Auth */}
         <div className="flex items-center gap-2 lg:gap-3">
-          {/* Quick Role Switcher for Testing (Owner / Admin / Player) */}
-          <div className="hidden xl:flex items-center gap-1 bg-zinc-900/90 border border-zinc-800 p-1 rounded-xl text-xs">
-            <span className="text-[11px] text-zinc-400 px-2">تجربة الدور:</span>
-            <button
-              onClick={() => switchDemoRole('owner')}
-              className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                role === 'owner'
-                  ? 'bg-amber-500 text-black shadow-sm'
-                  : 'text-zinc-400 hover:text-amber-300'
-              }`}
-            >
-              👑 Owner
-            </button>
-            <button
-              onClick={() => switchDemoRole('admin')}
-              className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                role === 'admin'
-                  ? 'bg-emerald-500 text-black shadow-sm'
-                  : 'text-zinc-400 hover:text-emerald-300'
-              }`}
-            >
-              🛡️ Admin
-            </button>
-            <button
-              onClick={() => switchDemoRole('player')}
-              className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-                role === 'player'
-                  ? 'bg-amber-400/20 text-amber-300 border border-amber-400/40'
-                  : 'text-zinc-400 hover:text-amber-200'
-              }`}
-            >
-              👤 Player
-            </button>
-          </div>
-
           {/* Supabase Connection Status Button */}
           <button
             onClick={openConfigModal}
@@ -297,39 +262,6 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
         <div className="md:hidden mt-3 pt-3 border-t border-zinc-800 flex flex-col gap-2 animate-in fade-in duration-200">
-          <div className="flex items-center justify-between p-2 bg-zinc-900/80 rounded-xl mb-1 text-xs">
-            <span className="text-zinc-400">تبديل الحساب التجريبي:</span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => {
-                  switchDemoRole('owner');
-                  setMobileMenuOpen(false);
-                }}
-                className={`px-2 py-1 rounded text-xs ${role === 'owner' ? 'bg-amber-500 text-black font-bold' : 'text-zinc-400'}`}
-              >
-                Owner
-              </button>
-              <button
-                onClick={() => {
-                  switchDemoRole('admin');
-                  setMobileMenuOpen(false);
-                }}
-                className={`px-2 py-1 rounded text-xs ${role === 'admin' ? 'bg-emerald-500 text-black font-bold' : 'text-zinc-400'}`}
-              >
-                Admin
-              </button>
-              <button
-                onClick={() => {
-                  switchDemoRole('player');
-                  setMobileMenuOpen(false);
-                }}
-                className={`px-2 py-1 rounded text-xs ${role === 'player' ? 'bg-amber-400/30 text-amber-200 font-bold' : 'text-zinc-400'}`}
-              >
-                Player
-              </button>
-            </div>
-          </div>
-
           <button
             onClick={() => {
               setActiveTab('home');

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { casinoEngine } from '../lib/supabase';
 import { MessageCircle, X, Send, Shield, User, Bot, Sparkles } from 'lucide-react';
 
 interface ChatModalProps {

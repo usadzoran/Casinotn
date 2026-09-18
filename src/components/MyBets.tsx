@@ -1,14 +1,57 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { casinoEngine } from '../lib/supabase';
+import { casinoApi, supabase } from '../lib/supabase';
 import { Bet } from '../types/database';
 import { Trophy, Clock, CheckCircle2, XCircle, AlertCircle, RefreshCw } from 'lucide-react';
 
 export const MyBets: React.FC = () => {
   const { user, role } = useAuth();
   const [filter, setFilter] = useState<'all' | 'pending' | 'won' | 'lost'>('all');
+  const [allBets, setAllBets] = useState<Bet[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const allBets = user ? casinoEngine.getBets(user.id, role || 'player') : [];
+  const loadBets = useCallback(async () => {
+    if (!user?.id) {
+      setAllBets([]);
+      setLoading(false);
+      return;
+    }
+    try {
+      const data = await casinoApi.getBets(user.id, role || 'player');
+      setAllBets(data);
+    } catch (err) {
+      console.warn('Error loading bets:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [user?.id, role]);
+
+  useEffect(() => {
+    loadBets();
+
+    if (!user?.id) return;
+
+    // Realtime updates for user's bets
+    const channel = supabase
+      .channel(`user-bets-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'bets',
+          ...(role === 'player' ? { filter: `user_id=eq.${user.id}` } : {}),
+        },
+        () => {
+          loadBets();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, loadBets, role]);
 
   const filteredBets = allBets.filter((bet) => {
     if (filter === 'all') return true;
@@ -67,7 +110,12 @@ export const MyBets: React.FC = () => {
       </div>
 
       {/* Bets List */}
-      {filteredBets.length === 0 ? (
+      {loading ? (
+        <div className="text-center py-16 px-4 rounded-3xl bg-[#121218] border border-zinc-800/80">
+          <RefreshCw className="w-8 h-8 text-amber-400 animate-spin mx-auto mb-3" />
+          <p className="text-xs text-zinc-400">جاري تحميل سجل الرهانات من قاعدة البيانات...</p>
+        </div>
+      ) : filteredBets.length === 0 ? (
         <div className="text-center py-16 px-4 rounded-3xl bg-[#121218] border border-zinc-800/80">
           <Trophy className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
           <h3 className="text-lg font-bold text-white mb-1">لا توجد رهانات في هذا القسم</h3>
@@ -76,85 +124,81 @@ export const MyBets: React.FC = () => {
           </p>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredBets.map((bet) => {
-            const formattedDate = new Date(bet.created_at).toLocaleDateString('ar-EG', {
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-            });
+            const teamLabel =
+              bet.selected_team === 'team_a'
+                ? bet.match?.team_a || 'الفريق الأول'
+                : bet.selected_team === 'team_b'
+                ? bet.match?.team_b || 'الفريق الثاني'
+                : 'تعادل';
 
             return (
               <div
                 key={bet.id}
-                className="p-5 rounded-3xl bg-[#121218] border border-amber-500/20 hover:border-amber-500/40 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
+                className="p-5 rounded-2xl bg-[#121218] border border-zinc-800 hover:border-amber-500/30 transition-all flex flex-col justify-between gap-4"
               >
-                {/* Match and Choice */}
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-bold text-white">
-                      {bet.match ? `${bet.match.team_a} ضد ${bet.match.team_b}` : 'مباراة رياضية'}
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">
+                      {bet.match?.league || 'دوري كرة القدم'}
                     </span>
-                    <span className="text-xs font-mono text-zinc-400">({bet.match?.league})</span>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 ${
+                        bet.status === 'won'
+                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                          : bet.status === 'lost'
+                          ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                          : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                      }`}
+                    >
+                      {bet.status === 'won' && <CheckCircle2 className="w-3 h-3" />}
+                      {bet.status === 'lost' && <XCircle className="w-3 h-3" />}
+                      {bet.status === 'pending' && <Clock className="w-3 h-3" />}
+                      {bet.status === 'won'
+                        ? 'ربح'
+                        : bet.status === 'lost'
+                        ? 'خسارة'
+                        : 'قيد الانتظار'}
+                    </span>
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs text-zinc-400">
-                    <span>اختيارك:</span>
-                    <span className="font-bold text-amber-300">
-                      {bet.selected_team === 'team_a'
-                        ? bet.match?.team_a
-                        : bet.selected_team === 'team_b'
-                        ? bet.match?.team_b
-                        : 'التعادل'}
-                    </span>
-                    <span>•</span>
-                    <span>معامل الرهان:</span>
-                    <span className="font-mono font-bold text-white">{bet.odds}</span>
+                  <div className="font-bold text-white text-base mb-2">
+                    {bet.match?.team_a} <span className="text-amber-400 mx-1">VS</span> {bet.match?.team_b}
+                  </div>
+
+                  <div className="p-2.5 rounded-xl bg-zinc-900/80 border border-zinc-800 text-xs flex items-center justify-between">
+                    <span className="text-zinc-400">الاختيار:</span>
+                    <span className="font-bold text-amber-300">{teamLabel}</span>
                   </div>
                 </div>
 
-                {/* Amounts */}
-                <div className="flex items-center gap-6 text-right">
+                <div className="pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs">
                   <div>
-                    <span className="text-[11px] text-zinc-400 block">قيمة الرهان</span>
-                    <span className="text-sm font-bold text-white font-mono">
-                      ${bet.bet_amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    <span className="text-zinc-500 block text-[10px]">مبلغ الرهان:</span>
+                    <span className="font-bold font-mono text-white text-sm">
+                      ${Number(bet.bet_amount ?? bet.amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </span>
                   </div>
 
-                  <div>
-                    <span className="text-[11px] text-zinc-400 block">الربح المتوقع</span>
-                    <span className="text-sm font-bold text-amber-400 font-mono">
-                      ${bet.potential_win.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  <div className="text-center">
+                    <span className="text-zinc-500 block text-[10px]">المعامل (ODDS):</span>
+                    <span className="font-bold font-mono text-amber-400">
+                      x{Number(bet.odds).toFixed(2)}
                     </span>
                   </div>
 
-                  {/* Status Badge */}
-                  <div>
-                    {bet.status === 'pending' && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                        <Clock className="w-3.5 h-3.5" />
-                        قيد الانتظار
-                      </span>
-                    )}
-                    {bet.status === 'won' && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        فوز رابح (+${bet.potential_win})
-                      </span>
-                    )}
-                    {bet.status === 'lost' && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
-                        <XCircle className="w-3.5 h-3.5" />
-                        خسارة
-                      </span>
-                    )}
-                    {bet.status === 'cancelled' && (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-zinc-800 text-zinc-400">
-                        ملغي (تم الاسترداد)
-                      </span>
-                    )}
+                  <div className="text-left">
+                    <span className="text-zinc-500 block text-[10px]">
+                      {bet.status === 'won' ? 'الربح المحصل:' : 'الربح المتوقع:'}
+                    </span>
+                    <span
+                      className={`font-bold font-mono text-sm ${
+                        bet.status === 'won' ? 'text-emerald-400' : 'text-zinc-300'
+                      }`}
+                    >
+                      ${Number(bet.potential_win).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </span>
                   </div>
                 </div>
               </div>

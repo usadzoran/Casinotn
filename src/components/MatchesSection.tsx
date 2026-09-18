@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Match } from '../types/database';
 import { useAuth } from '../context/AuthContext';
-import { casinoEngine } from '../lib/supabase';
+import { casinoApi } from '../lib/supabase';
 import { Trophy, Clock, AlertCircle, CheckCircle2, X, ChevronRight, Sparkles, RefreshCw } from 'lucide-react';
 
 interface MatchesSectionProps {
@@ -56,10 +56,10 @@ export const MatchesSection: React.FC<MatchesSectionProps> = ({ matches, onBetPl
     setIsSubmitting(true);
 
     try {
-      const res = await casinoEngine.placeMatchBet(user.id, selectedMatch.id, selectedTeam, betAmount);
+      const res = await casinoApi.placeMatchBet(selectedMatch.id, selectedTeam, betAmount);
       refreshUserData();
       onBetPlaced();
-      setSuccessMsg(`تم تسجيل الرهان بنجاح! الربح المتوقع: $${res.potentialWin.toLocaleString()}`);
+      setSuccessMsg(`تم تسجيل الرهان بنجاح! الربح المتوقع: $${res.potential_win.toLocaleString()}`);
       setTimeout(() => {
         setSelectedMatch(null);
         setSuccessMsg(null);

@@ -8,6 +8,7 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(() => {
   return {
+    base: process.env.VITE_BASE_PATH || (process.env.GITHUB_ACTIONS ? '/Casinotn/' : './'),
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

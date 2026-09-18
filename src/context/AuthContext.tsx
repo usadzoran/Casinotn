@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Profile, UserRole, Wallet, Notification } from '../types/database';
-import { casinoEngine, supabase, getSavedSupabaseConfig } from '../lib/supabase';
+import { supabase, casinoApi, getSavedSupabaseConfig } from '../lib/supabase';
 
 interface AuthContextType {
   user: Profile | null;
@@ -10,12 +10,11 @@ interface AuthContextType {
   unreadNotificationsCount: number;
   isLoading: boolean;
   isSupabaseConnected: boolean;
-  switchDemoRole: (role: UserRole) => void;
   login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
   register: (fullName: string, username: string, email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
-  refreshUserData: () => void;
-  markNotificationsAsRead: () => void;
+  logout: () => Promise<void>;
+  refreshUserData: () => Promise<void>;
+  markNotificationsAsRead: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -24,116 +23,151 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const config = getSavedSupabaseConfig();
   const isSupabaseConnected = config.isConfigured;
 
-  // Current active user (defaults to Player VIP for instant player experience, with easy 1-click switch to Owner/Admin)
-  const [currentUserId, setCurrentUserId] = useState<string>('00000000-0000-0000-0000-000000000001'); // Start as Owner by default so owner can oversee
   const [user, setUser] = useState<Profile | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Sync state
-  const syncState = () => {
+  // Fetch user profile, wallet, and notifications from Supabase
+  const loadUserData = useCallback(async (userId: string) => {
     try {
-      if (!currentUserId) {
-        setUser(null);
-        setWallet(null);
-        setNotifications([]);
-        setIsLoading(false);
-        return;
-      }
+      const [profileData, walletData, notifsData] = await Promise.all([
+        casinoApi.getProfile(userId),
+        casinoApi.getWallet(userId),
+        casinoApi.getNotifications(userId),
+      ]);
 
-      const p = casinoEngine?.getProfile ? casinoEngine.getProfile(currentUserId) : null;
-      const w = casinoEngine?.getWallet ? casinoEngine.getWallet(currentUserId) : null;
-      const notifs = casinoEngine?.getNotifications ? casinoEngine.getNotifications(currentUserId) : [];
-
-      setUser(p);
-      setWallet(w ? { ...w } : null);
-      setNotifications(Array.isArray(notifs) ? notifs : []);
-      setIsLoading(false);
+      setUser(profileData);
+      setWallet(walletData);
+      setNotifications(notifsData);
     } catch (err) {
-      console.warn('Error in syncState:', err);
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    syncState();
-    try {
-      const unsubscribe = casinoEngine?.subscribe?.(() => {
-        syncState();
-      });
-      return () => unsubscribe?.();
-    } catch (err) {
-      console.warn('Error subscribing to engine:', err);
-    }
-  }, [currentUserId]);
-
-  // If real Supabase Auth is active
-  useEffect(() => {
-    if (supabase) {
-      supabase.auth
-        .getSession()
-        .then(({ data: { session } }) => {
-          if (session?.user) {
-            // If live Supabase session exists
-            const p = casinoEngine?.getProfile ? casinoEngine.getProfile(session.user.id) : null;
-            if (p) setCurrentUserId(p.id);
-          }
-        })
-        .catch((err) => {
-          console.warn('Supabase getSession error ignored:', err);
-        });
-
-      try {
-        const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-          if (session?.user) {
-            const p = casinoEngine?.getProfile ? casinoEngine.getProfile(session.user.id) : null;
-            if (p) setCurrentUserId(p.id);
-          }
-        });
-
-        return () => {
-          authListener?.subscription?.unsubscribe?.();
-        };
-      } catch (err) {
-        console.warn('Supabase onAuthStateChange error ignored:', err);
-      }
+      console.warn('[5LION CASINO] Error loading user data from Supabase:', err);
     }
   }, []);
 
-  const switchDemoRole = (role: UserRole) => {
-    const profiles = casinoEngine.getProfiles();
-    const target = profiles.find((p) => p.role === role);
-    if (target) {
-      setCurrentUserId(target.id);
+  const refreshUserData = useCallback(async () => {
+    if (user?.id) {
+      await loadUserData(user.id);
     }
-  };
+  }, [user?.id, loadUserData]);
 
-  const login = async (email: string, _pass: string) => {
+  // Handle Supabase Auth lifecycle
+  useEffect(() => {
+    let isMounted = true;
+
+    // 1. Initial Session Check
+    supabase.auth
+      .getSession()
+      .then(async ({ data: { session } }) => {
+        if (!isMounted) return;
+        if (session?.user?.id) {
+          await loadUserData(session.user.id);
+        } else {
+          setUser(null);
+          setWallet(null);
+          setNotifications([]);
+        }
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        console.warn('[5LION CASINO] Session check failed:', err);
+        if (isMounted) setIsLoading(false);
+      });
+
+    // 2. Auth State Change Listener
+    const {
+      data: { subscription: authListener },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+      if (session?.user?.id) {
+        await loadUserData(session.user.id);
+      } else {
+        setUser(null);
+        setWallet(null);
+        setNotifications([]);
+      }
+      setIsLoading(false);
+    });
+
+    return () => {
+      isMounted = false;
+      authListener?.unsubscribe();
+    };
+  }, [loadUserData]);
+
+  // 3. Realtime Subscription for active user's Wallet & Notifications
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`user-realtime-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'wallets',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            setWallet(payload.new as Wallet);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            setNotifications((prev) => [payload.new as Notification, ...prev]);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            setUser(payload.new as Profile);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  // Login via Supabase Auth
+  const login = async (email: string, pass: string): Promise<{ success: boolean; error?: string }> => {
     setIsLoading(true);
     try {
-      if (supabase) {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password: _pass });
-        if (error) throw error;
-        if (data.user) {
-          setCurrentUserId(data.user.id);
-          return { success: true };
-        }
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: pass,
+      });
+
+      if (error) {
+        setIsLoading(false);
+        return { success: false, error: error.message };
       }
 
-      // In-engine auth fallback
-      const profiles = casinoEngine.getProfiles();
-      const match = profiles.find((p) => p.email.toLowerCase() === email.toLowerCase() || p.username.toLowerCase() === email.toLowerCase());
-      if (!match) {
-        setIsLoading(false);
-        return { success: false, error: 'البريد الإلكتروني أو اسم المستخدم غير موجود' };
-      }
-      if (match.status !== 'active') {
-        setIsLoading(false);
-        return { success: false, error: 'هذا الحساب معلق أو محظور' };
+      if (data.user?.id) {
+        await loadUserData(data.user.id);
       }
 
-      setCurrentUserId(match.id);
       setIsLoading(false);
       return { success: true };
     } catch (err: any) {
@@ -142,47 +176,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const register = async (fullName: string, username: string, email: string, pass: string) => {
+  // Public Player Registration via Supabase Auth
+  const register = async (
+    fullName: string,
+    username: string,
+    email: string,
+    pass: string
+  ): Promise<{ success: boolean; error?: string }> => {
     setIsLoading(true);
     try {
-      if (supabase) {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password: pass,
-          options: {
-            data: { full_name: fullName, username },
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password: pass,
+        options: {
+          data: {
+            full_name: fullName.trim(),
+            username: username.trim().toLowerCase(),
+            role: 'player', // strictly player for public signups!
           },
-        });
-        if (error) throw error;
-        if (data.user) {
-          setCurrentUserId(data.user.id);
-          return { success: true };
-        }
-      }
+        },
+      });
 
-      // In-engine registration (ALWAYS PLAYER)
-      const profiles = casinoEngine.getProfiles();
-      const exists = profiles.some((p) => p.email.toLowerCase() === email.toLowerCase() || p.username.toLowerCase() === username.toLowerCase());
-      if (exists) {
+      if (error) {
         setIsLoading(false);
-        return { success: false, error: 'البريد الإلكتروني أو اسم المستخدم مسجل مسبقاً' };
+        return { success: false, error: error.message };
       }
 
-      const newId = `usr-${Date.now()}`;
-      const newPlayer: Profile = {
-        id: newId,
-        full_name: fullName,
-        username,
-        email,
-        role: 'player', // strictly player for public signups!
-        status: 'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      // Register into engine
-      profiles.push(newPlayer);
-      casinoEngine.getWallet(newId); // auto creates 0 balance wallet
-      setCurrentUserId(newId);
+      if (data.user?.id) {
+        // Wait briefly for triggers to complete insertion
+        await new Promise((r) => setTimeout(r, 600));
+        await loadUserData(data.user.id);
+      }
+
       setIsLoading(false);
       return { success: true };
     } catch (err: any) {
@@ -191,21 +216,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const logout = () => {
-    if (supabase) {
-      supabase.auth.signOut().catch(console.error);
+  // Logout via Supabase Auth
+  const logout = async () => {
+    setIsLoading(true);
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn('Sign out error:', err);
+    } finally {
+      setUser(null);
+      setWallet(null);
+      setNotifications([]);
+      setIsLoading(false);
     }
-    // Set to Player by default or null
-    setCurrentUserId('');
   };
 
-  const refreshUserData = () => {
-    syncState();
-  };
-
-  const markNotificationsAsRead = () => {
-    if (user) {
-      casinoEngine.markNotificationsRead(user.id);
+  const markNotificationsAsRead = async () => {
+    if (user?.id) {
+      await casinoApi.markNotificationsRead(user.id);
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     }
   };
 
@@ -221,7 +250,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         unreadNotificationsCount,
         isLoading,
         isSupabaseConnected,
-        switchDemoRole,
         login,
         register,
         logout,

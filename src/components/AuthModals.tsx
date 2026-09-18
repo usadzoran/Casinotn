@@ -10,9 +10,9 @@ interface AuthModalProps {
 }
 
 export const LoginModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSwitchToRegister }) => {
-  const { login, switchDemoRole } = useAuth();
-  const [email, setEmail] = useState('player@5lion.casino');
-  const [password, setPassword] = useState('password123');
+  const { login } = useAuth();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -31,11 +31,6 @@ export const LoginModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSwitch
     }
   };
 
-  const handleQuickRole = (role: 'owner' | 'admin' | 'player') => {
-    switchDemoRole(role);
-    onClose();
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
       <div className="relative w-full max-w-md rounded-3xl bg-[#121218] border border-amber-500/40 p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
@@ -51,38 +46,7 @@ export const LoginModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSwitch
           </button>
         </div>
 
-        {/* Quick Demo Switcher */}
-        <div className="my-4 p-3 bg-zinc-900/90 rounded-2xl border border-zinc-800 text-xs">
-          <span className="text-zinc-400 block mb-2 font-medium">تجربة سريعة بنقرة واحدة (دخول فوري):</span>
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => handleQuickRole('owner')}
-              className="py-1.5 px-2 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold hover:bg-amber-500 hover:text-black transition-all flex items-center justify-center gap-1"
-            >
-              <Crown className="w-3 h-3" />
-              <span>المالك (Owner)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickRole('admin')}
-              className="py-1.5 px-2 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold hover:bg-emerald-500 hover:text-black transition-all flex items-center justify-center gap-1"
-            >
-              <Shield className="w-3 h-3" />
-              <span>مشرف (Admin)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickRole('player')}
-              className="py-1.5 px-2 rounded-xl bg-zinc-800 border border-zinc-700 text-zinc-200 font-bold hover:bg-zinc-700 transition-all flex items-center justify-center gap-1"
-            >
-              <User className="w-3 h-3" />
-              <span>لاعب (Player)</span>
-            </button>
-          </div>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4 mt-4">
           <div>
             <label className="block text-xs font-semibold text-zinc-300 mb-1">
               البريد الإلكتروني أو اسم المستخدم:
