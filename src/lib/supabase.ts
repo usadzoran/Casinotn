@@ -34,8 +34,11 @@ const safeStorage = {
 };
 
 const DEFAULT_SUPABASE_URL = 'https://aixntdfmdozuiriwaqdq.supabase.co';
-const ENV_SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL || '').trim() || DEFAULT_SUPABASE_URL;
-const ENV_SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+const rawEnvUrl = typeof import.meta !== 'undefined' && import.meta?.env ? import.meta.env.VITE_SUPABASE_URL : undefined;
+const rawEnvKey = typeof import.meta !== 'undefined' && import.meta?.env ? import.meta.env.VITE_SUPABASE_ANON_KEY : undefined;
+
+const ENV_SUPABASE_URL = (rawEnvUrl || '').trim() || DEFAULT_SUPABASE_URL;
+const ENV_SUPABASE_ANON_KEY = (rawEnvKey || '').trim();
 
 function isValidHttpUrl(stringUrl: string): boolean {
   if (!stringUrl || typeof stringUrl !== 'string') return false;

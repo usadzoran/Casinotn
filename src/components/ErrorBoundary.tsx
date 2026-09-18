@@ -45,7 +45,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render(): ReactNode {
     if (this.state.hasError) {
-      const isDev = Boolean(import.meta.env?.DEV);
+      const isDev = Boolean(typeof import.meta !== 'undefined' && import.meta?.env?.DEV);
 
       return (
         <div
