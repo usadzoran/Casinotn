@@ -16,6 +16,7 @@ import { NotificationsModal } from './components/NotificationsModal';
 import { ChatModal } from './components/ChatModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { casinoApi, supabase } from './lib/supabase';
+import { casinoDatabase } from './lib/databaseEngine';
 import { Game, Match } from './types/database';
 import { MessageCircle } from 'lucide-react';
 
@@ -30,7 +31,7 @@ const CasinoApp: React.FC = () => {
   const [notifOpen, setNotifOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
-  // Live Data State directly from Supabase
+  // Live Data State
   const [games, setGames] = useState<Game[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
@@ -53,7 +54,7 @@ const CasinoApp: React.FC = () => {
   useEffect(() => {
     fetchCatalogData();
 
-    // Supabase Realtime for Matches and Games
+    // 1. Supabase Realtime for Matches and Games
     const channel = supabase
       .channel('public-catalog-realtime')
       .on(
@@ -72,8 +73,16 @@ const CasinoApp: React.FC = () => {
       )
       .subscribe();
 
+    // 2. Local Database Events
+    const unsubscribeDb = casinoDatabase.subscribe((table) => {
+      if (table === 'matches' || table === 'games' || table === 'all') {
+        fetchCatalogData();
+      }
+    });
+
     return () => {
       supabase.removeChannel(channel);
+      unsubscribeDb();
     };
   }, [fetchCatalogData]);
 

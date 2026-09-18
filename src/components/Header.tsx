@@ -34,7 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   openConfigModal,
   openNotifModal,
 }) => {
-  const { user, wallet, role, logout, unreadNotificationsCount, isSupabaseConnected } = useAuth();
+  const { user, wallet, role, logout, unreadNotificationsCount, isSupabaseConnected, quickLoginAsRole } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
@@ -205,6 +205,34 @@ export const Header: React.FC<HeaderProps> = ({
                   </span>
                 )}
               </button>
+
+              {/* Role Quick Switcher for testing */}
+              <div className="hidden xl:flex items-center gap-1 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => quickLoginAsRole('owner')}
+                  className={`px-2 py-1 rounded-lg font-medium transition-all ${role === 'owner' ? 'bg-amber-500/25 text-amber-300 font-bold border border-amber-500/40' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  title="التبديل السريع إلى حساب المالك ($1,000,000)"
+                >
+                  👑 مالك
+                </button>
+                <button
+                  type="button"
+                  onClick={() => quickLoginAsRole('admin')}
+                  className={`px-2 py-1 rounded-lg font-medium transition-all ${role === 'admin' ? 'bg-emerald-500/25 text-emerald-300 font-bold border border-emerald-500/40' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  title="التبديل السريع إلى حساب المشرف ($50,000)"
+                >
+                  🛡️ مشرف
+                </button>
+                <button
+                  type="button"
+                  onClick={() => quickLoginAsRole('player')}
+                  className={`px-2 py-1 rounded-lg font-medium transition-all ${role === 'player' ? 'bg-blue-500/25 text-blue-300 font-bold border border-blue-500/40' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  title="التبديل السريع إلى حساب اللاعب ($2,500)"
+                >
+                  🎮 لاعب
+                </button>
+              </div>
 
               {/* User Dropdown / Info */}
               <div className="flex items-center gap-2 pr-1">

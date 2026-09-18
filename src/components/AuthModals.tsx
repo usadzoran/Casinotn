@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { LogIn, UserPlus, X, AlertCircle, CheckCircle2, RefreshCw, Crown, Shield, User } from 'lucide-react';
+import { LogIn, UserPlus, X, AlertCircle, RefreshCw, Crown, Shield, User, Sparkles } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -10,7 +10,7 @@ interface AuthModalProps {
 }
 
 export const LoginModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSwitchToRegister }) => {
-  const { login } = useAuth();
+  const { login, quickLoginAsRole } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +31,18 @@ export const LoginModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSwitch
     }
   };
 
+  const handleQuickLogin = async (roleType: 'owner' | 'admin' | 'player') => {
+    setError(null);
+    setLoading(true);
+    const res = await quickLoginAsRole(roleType);
+    setLoading(false);
+    if (res.success) {
+      onClose();
+    } else {
+      setError(res.error || 'فشل تسجيل الدخول السريع');
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
       <div className="relative w-full max-w-md rounded-3xl bg-[#121218] border border-amber-500/40 p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
@@ -46,7 +58,53 @@ export const LoginModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSwitch
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4 mt-4">
+        {/* Quick Role Selection Banner */}
+        <div className="my-4 p-3.5 rounded-2xl bg-[#181722] border border-amber-500/20">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300 mb-2.5">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>تسجيل دخول تجريبي سريع بنقرة واحدة:</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => handleQuickLogin('owner')}
+              className="p-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-[11px] font-bold flex flex-col items-center gap-1 transition-all"
+            >
+              <Crown className="w-4 h-4 text-amber-400" />
+              <span>المالك (Owner)</span>
+              <span className="text-[9px] text-zinc-400 font-normal">$1,000,000</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleQuickLogin('admin')}
+              className="p-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[11px] font-bold flex flex-col items-center gap-1 transition-all"
+            >
+              <Shield className="w-4 h-4 text-emerald-400" />
+              <span>مشرف (Admin)</span>
+              <span className="text-[9px] text-zinc-400 font-normal">$50,000</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleQuickLogin('player')}
+              className="p-2 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30 text-blue-300 text-[11px] font-bold flex flex-col items-center gap-1 transition-all"
+            >
+              <User className="w-4 h-4 text-blue-400" />
+              <span>لاعب (Player)</span>
+              <span className="text-[9px] text-zinc-400 font-normal">$2,500</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="relative my-4">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-zinc-800" />
+          </div>
+          <div className="relative flex justify-center text-xs uppercase">
+            <span className="bg-[#121218] px-2 text-zinc-500">أو بالبريد وكلمة المرور</span>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-3.5">
           <div>
             <label className="block text-xs font-semibold text-zinc-300 mb-1">
               البريد الإلكتروني أو اسم المستخدم:
@@ -54,6 +112,7 @@ export const LoginModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSwitch
             <input
               type="text"
               required
+              placeholder="owner@5lion.com أو admin أو player"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full py-2.5 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs focus:outline-none focus:border-amber-400 text-left ltr"
@@ -65,6 +124,7 @@ export const LoginModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSwitch
             <input
               type="password"
               required
+              placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full py-2.5 px-3 rounded-xl bg-zinc-900 border border-zinc-700 text-white text-xs focus:outline-none focus:border-amber-400 text-left ltr"
@@ -144,7 +204,7 @@ export const RegisterModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSwi
         </div>
 
         <div className="my-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-[11px] text-amber-200">
-          * التسجيل العام يمنحك دور <strong>لاعب (Player)</strong> برصيد افتراضي أولي $0.00. يتم شحن الرصيد من قِبل المشرفين فقط.
+          * التسجيل يمنحك دور <strong>لاعب (Player)</strong> برصيد افتراضي أولي ترحيبي $100.00. يمكن شحن رصيد إضافي بواسطة المشرفين.
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3">

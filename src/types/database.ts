@@ -35,14 +35,15 @@ export interface Wallet {
   user_id: string;
   balance: number;
   currency: 'VIRTUAL_USD';
-  created_at: string;
+  is_locked?: boolean;
+  created_at?: string;
   updated_at: string;
 }
 
 export interface WalletTransaction {
   id: string;
   wallet_id: string;
-  user_id: string;
+  user_id?: string | null;
   type: TransactionType;
   amount: number;
   balance_before: number;
@@ -76,7 +77,7 @@ export interface Game {
 export interface Match {
   id: string;
   league: string;
-  sport: string;
+  sport?: string;
   team_a: string;
   team_b: string;
   team_a_logo?: string;
@@ -107,8 +108,9 @@ export interface Bet {
   odds: number;
   potential_win: number;
   status: BetStatus;
-  result: 'pending' | 'win' | 'loss' | 'cancelled';
+  result?: 'pending' | 'win' | 'loss' | 'cancelled';
   created_at: string;
+  updated_at?: string;
   settled_at?: string | null;
   match?: Match;
   profile?: Profile;
