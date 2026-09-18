@@ -33,55 +33,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Sync state
   const syncState = () => {
-    if (!currentUserId) {
-      setUser(null);
-      setWallet(null);
-      setNotifications([]);
+    try {
+      if (!currentUserId) {
+        setUser(null);
+        setWallet(null);
+        setNotifications([]);
+        setIsLoading(false);
+        return;
+      }
+
+      const p = casinoEngine?.getProfile ? casinoEngine.getProfile(currentUserId) : null;
+      const w = casinoEngine?.getWallet ? casinoEngine.getWallet(currentUserId) : null;
+      const notifs = casinoEngine?.getNotifications ? casinoEngine.getNotifications(currentUserId) : [];
+
+      setUser(p);
+      setWallet(w ? { ...w } : null);
+      setNotifications(Array.isArray(notifs) ? notifs : []);
       setIsLoading(false);
-      return;
+    } catch (err) {
+      console.warn('Error in syncState:', err);
+      setIsLoading(false);
     }
-
-    const p = casinoEngine.getProfile(currentUserId);
-    const w = casinoEngine.getWallet(currentUserId);
-    const notifs = casinoEngine.getNotifications(currentUserId);
-
-    setUser(p);
-    setWallet(w ? { ...w } : null);
-    setNotifications(notifs);
-    setIsLoading(false);
   };
 
   useEffect(() => {
     syncState();
-    const unsubscribe = casinoEngine.subscribe(() => {
-      syncState();
-    });
-    return () => unsubscribe();
+    try {
+      const unsubscribe = casinoEngine?.subscribe?.(() => {
+        syncState();
+      });
+      return () => unsubscribe?.();
+    } catch (err) {
+      console.warn('Error subscribing to engine:', err);
+    }
   }, [currentUserId]);
 
   // If real Supabase Auth is active
   useEffect(() => {
     if (supabase) {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session?.user) {
-          // If live Supabase session exists
-          const p = casinoEngine.getProfile(session.user.id);
-          if (p) setCurrentUserId(p.id);
-        }
-      });
+      supabase.auth
+        .getSession()
+        .then(({ data: { session } }) => {
+          if (session?.user) {
+            // If live Supabase session exists
+            const p = casinoEngine?.getProfile ? casinoEngine.getProfile(session.user.id) : null;
+            if (p) setCurrentUserId(p.id);
+          }
+        })
+        .catch((err) => {
+          console.warn('Supabase getSession error ignored:', err);
+        });
 
-      const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-        if (session?.user) {
-          const p = casinoEngine.getProfile(session.user.id);
-          if (p) setCurrentUserId(p.id);
-        } else {
-          // If signed out from Supabase
-        }
-      });
+      try {
+        const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+          if (session?.user) {
+            const p = casinoEngine?.getProfile ? casinoEngine.getProfile(session.user.id) : null;
+            if (p) setCurrentUserId(p.id);
+          }
+        });
 
-      return () => {
-        authListener.subscription.unsubscribe();
-      };
+        return () => {
+          authListener?.subscription?.unsubscribe?.();
+        };
+      } catch (err) {
+        console.warn('Supabase onAuthStateChange error ignored:', err);
+      }
     }
   }, []);
 

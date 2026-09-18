@@ -15,6 +15,7 @@ import { ConfigModal } from './components/ConfigModal';
 import { NotificationsModal } from './components/NotificationsModal';
 import { ChatModal } from './components/ChatModal';
 import { ScenarioRunnerModal } from './components/ScenarioRunnerModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { casinoEngine } from './lib/supabase';
 import { MessageCircle, Sparkles, Trophy, Crown, Shield, Layers, PlayCircle } from 'lucide-react';
 
@@ -30,21 +31,47 @@ const CasinoApp: React.FC = () => {
   const [chatOpen, setChatOpen] = useState(false);
   const [scenarioOpen, setScenarioOpen] = useState(false);
 
-  // Live Data State from Engine
-  const [games, setGames] = useState(casinoEngine.getGames());
-  const [matches, setMatches] = useState(casinoEngine.getMatches());
+  // Live Data State from Engine (safely initialized to prevent runtime crashes)
+  const [games, setGames] = useState(() => {
+    try {
+      return casinoEngine?.getGames ? casinoEngine.getGames() : [];
+    } catch (err) {
+      console.warn('Could not load initial games:', err);
+      return [];
+    }
+  });
+  const [matches, setMatches] = useState(() => {
+    try {
+      return casinoEngine?.getMatches ? casinoEngine.getMatches() : [];
+    } catch (err) {
+      console.warn('Could not load initial matches:', err);
+      return [];
+    }
+  });
 
   useEffect(() => {
-    const unsub = casinoEngine.subscribe(() => {
-      setGames([...casinoEngine.getGames()]);
-      setMatches([...casinoEngine.getMatches()]);
-    });
-    return () => unsub();
+    try {
+      const unsub = casinoEngine?.subscribe?.(() => {
+        try {
+          setGames(casinoEngine.getGames ? [...casinoEngine.getGames()] : []);
+          setMatches(casinoEngine.getMatches ? [...casinoEngine.getMatches()] : []);
+        } catch {
+          // ignore
+        }
+      });
+      return () => unsub?.();
+    } catch (err) {
+      console.warn('Engine subscription failed:', err);
+    }
   }, []);
 
   const handleRefresh = () => {
-    setGames([...casinoEngine.getGames()]);
-    setMatches([...casinoEngine.getMatches()]);
+    try {
+      setGames(casinoEngine.getGames ? [...casinoEngine.getGames()] : []);
+      setMatches(casinoEngine.getMatches ? [...casinoEngine.getMatches()] : []);
+    } catch (err) {
+      console.warn('Refresh failed:', err);
+    }
   };
 
   return (
@@ -166,8 +193,10 @@ const CasinoApp: React.FC = () => {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <CasinoApp />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <CasinoApp />
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

@@ -1,50 +1,115 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Game, Match, Profile, Wallet, WalletTransaction, Bet, Notification, ActivityLog, Message, Conversation } from '../types/database';
 
-const ENV_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
-const ENV_SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Safe localStorage wrapper to avoid DOMException / SecurityError in sandboxes/iframes/private windows
+const safeStorage = {
+  getItem: (key: string): string | null => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        return window.localStorage.getItem(key);
+      }
+    } catch {
+      // Storage access blocked or unavailable
+    }
+    return null;
+  },
+  setItem: (key: string, value: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(key, value);
+      }
+    } catch {
+      // Storage access blocked or unavailable
+    }
+  },
+  removeItem: (key: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem(key);
+      }
+    } catch {
+      // Storage access blocked or unavailable
+    }
+  },
+};
+
+const DEFAULT_SUPABASE_URL = 'https://aixntdfmdozuiriwaqdq.supabase.co';
+const ENV_SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL || '').trim() || DEFAULT_SUPABASE_URL;
+const ENV_SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+
+function isValidHttpUrl(stringUrl: string): boolean {
+  if (!stringUrl || typeof stringUrl !== 'string') return false;
+  try {
+    const parsed = new URL(stringUrl);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 export const getSavedSupabaseConfig = () => {
-  const customUrl = localStorage.getItem('5LION_SUPABASE_URL');
-  const customKey = localStorage.getItem('5LION_SUPABASE_ANON_KEY');
+  const customUrl = (safeStorage.getItem('5LION_SUPABASE_URL') || '').trim();
+  const customKey = (safeStorage.getItem('5LION_SUPABASE_ANON_KEY') || '').trim();
+
+  const activeUrl = customUrl || ENV_SUPABASE_URL;
+  const activeKey = customKey || ENV_SUPABASE_ANON_KEY;
+
+  const isUrlValid = isValidHttpUrl(activeUrl) && !activeUrl.includes('your-project-id');
+  const isKeyValid = Boolean(activeKey && activeKey.length > 20 && !activeKey.includes('your-anon'));
+
   return {
-    url: customUrl || ENV_SUPABASE_URL,
-    anonKey: customKey || ENV_SUPABASE_ANON_KEY,
+    url: activeUrl,
+    anonKey: activeKey,
     isCustom: Boolean(customUrl && customKey),
-    isConfigured: Boolean((customUrl && customKey) || (ENV_SUPABASE_URL && ENV_SUPABASE_ANON_KEY && !ENV_SUPABASE_URL.includes('your-project-id'))),
+    isConfigured: Boolean(isUrlValid && isKeyValid),
   };
 };
 
 export const saveSupabaseConfig = (url: string, anonKey: string) => {
   if (url && anonKey) {
-    localStorage.setItem('5LION_SUPABASE_URL', url.trim());
-    localStorage.setItem('5LION_SUPABASE_ANON_KEY', anonKey.trim());
-    window.location.reload();
+    safeStorage.setItem('5LION_SUPABASE_URL', url.trim());
+    safeStorage.setItem('5LION_SUPABASE_ANON_KEY', anonKey.trim());
+    try {
+      if (typeof window !== 'undefined') {
+        window.location.reload();
+      }
+    } catch {
+      // ignore
+    }
   }
 };
 
 export const clearSupabaseConfig = () => {
-  localStorage.removeItem('5LION_SUPABASE_URL');
-  localStorage.removeItem('5LION_SUPABASE_ANON_KEY');
-  window.location.reload();
+  safeStorage.removeItem('5LION_SUPABASE_URL');
+  safeStorage.removeItem('5LION_SUPABASE_ANON_KEY');
+  try {
+    if (typeof window !== 'undefined') {
+      window.location.reload();
+    }
+  } catch {
+    // ignore
+  }
 };
-
-const config = getSavedSupabaseConfig();
 
 export let supabase: SupabaseClient | null = null;
 
-if (config.url && config.anonKey && !config.url.includes('your-project-id')) {
-  try {
+try {
+  const config = getSavedSupabaseConfig();
+  if (config.isConfigured && isValidHttpUrl(config.url)) {
     supabase = createClient(config.url, config.anonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
+        detectSessionInUrl: true,
       },
     });
-  } catch (err) {
-    console.warn('Could not initialize Supabase client:', err);
+  } else {
+    // In-browser engine fallback active; no crash or white screen
     supabase = null;
   }
+} catch (err) {
+  console.warn('[5LION CASINO] Supabase client initialization bypassed; falling back to in-browser engine:', err);
+  supabase = null;
 }
 
 // ====================================================================
@@ -286,14 +351,18 @@ class CasinoEngine {
   }
 
   getProfiles() {
-    return [...this.profiles];
+    return Array.isArray(this.profiles) ? [...this.profiles] : [];
   }
 
   getProfile(id: string) {
+    if (!Array.isArray(this.profiles)) return null;
     return this.profiles.find((p) => p.id === id) || null;
   }
 
   getWallet(userId: string): Wallet {
+    if (!Array.isArray(this.wallets)) {
+      this.wallets = [];
+    }
     let w = this.wallets.find((x) => x.user_id === userId);
     if (!w) {
       w = {
@@ -310,6 +379,7 @@ class CasinoEngine {
   }
 
   getTransactions(userId?: string, role?: string): WalletTransaction[] {
+    if (!Array.isArray(this.transactions)) return [];
     if (role === 'owner') return [...this.transactions];
     if (role === 'admin') {
       return this.transactions.filter(
@@ -320,24 +390,26 @@ class CasinoEngine {
   }
 
   getGames() {
-    return [...this.games];
+    return Array.isArray(this.games) ? [...this.games] : [];
   }
 
   getMatches() {
-    return [...this.matches];
+    return Array.isArray(this.matches) ? [...this.matches] : [];
   }
 
   getBets(userId?: string, role?: string) {
+    if (!Array.isArray(this.bets)) return [];
     if (role === 'owner' || role === 'admin') return [...this.bets];
     return this.bets.filter((b) => b.user_id === userId);
   }
 
   getNotifications(userId: string) {
+    if (!Array.isArray(this.notifications)) return [];
     return this.notifications.filter((n) => n.user_id === userId);
   }
 
   getActivityLogs() {
-    return [...this.activityLogs];
+    return Array.isArray(this.activityLogs) ? [...this.activityLogs] : [];
   }
 
   getConversations(userId: string, role: string) {
@@ -1078,4 +1150,11 @@ class CasinoEngine {
   }
 }
 
-export const casinoEngine = new CasinoEngine();
+let engineInstance: CasinoEngine;
+try {
+  engineInstance = new CasinoEngine();
+} catch (err) {
+  console.error('[5LION Engine] Error initializing CasinoEngine:', err);
+  engineInstance = Object.create(CasinoEngine.prototype);
+}
+export const casinoEngine = engineInstance;
