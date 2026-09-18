@@ -1,0 +1,6 @@
+{
+  "name": "5LION CASINO",
+  "description": "5LION CASINO - منصة ألعاب وترفيه فاخرة بنظام رصيد افتراضي وصلاحيات متكاملة (Owner, Admin, Player)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

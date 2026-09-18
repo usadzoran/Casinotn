@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+  }
+}
+
+.font-cinzel {
+  font-family: 'Cinzel', serif;
+}
+
+.font-goldman {
+  font-family: 'Goldman', sans-serif;
+}
+
+/* Luxury Gold & Glass Utilities */
+.gold-gradient-text {
+  background: linear-gradient(135deg, #FFF6D1 0%, #DFB343 30%, #C49326 60%, #F5DE88 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gold-gradient-bg {
+  background: linear-gradient(135deg, #FFDF73 0%, #D4A017 40%, #A67507 100%);
+}
+
+.gold-gradient-border {
+  border-image: linear-gradient(to bottom right, #D4A017, #5c4308, #D4A017) 1;
+}
+
+.casino-glass {
+  background: rgba(18, 18, 24, 0.85);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(212, 160, 23, 0.2);
+}
+
+.casino-glass-gold {
+  background: linear-gradient(180deg, rgba(30, 24, 12, 0.9) 0%, rgba(14, 13, 10, 0.95) 100%);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(212, 160, 23, 0.35);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.8), 0 0 20px -5px rgba(212, 160, 23, 0.15);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #09090c;
+}
+::-webkit-scrollbar-thumb {
+  background: #382c12;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c49326;
+}
+
